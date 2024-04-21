@@ -1,5 +1,4 @@
 # Serato to Rekordbox converter by BytePhoenix
-# TODO: fix bug with failed base64 decoding
 # TODO: fix failing TPE1 (artist) parsing
 # TODO: add names parsing
 # TODO: print number of track failed and successfully converted
@@ -127,7 +126,7 @@ def extract_mp3_metadata(track):
             if hasattr(tag, 'text'):
                 audio_metadata[tag_name] = tag.text[0]
             else:
-                if tag_name == "TIT2" or tag_name == "TPE1":  # Ignore TALB warnings
+                if tag_name in ("TIT2", "TPE1"):  # Ignore TALB warnings
                     print(f"Warning: Tag {tag_name} not properly formatted in file {track}.")
                 audio_metadata[tag_name] = 'Unknown'
         except Exception as e:
@@ -147,10 +146,11 @@ def parse_serato_hot_cues(base64_data, track):
     # Remove non-base64 characters
     clean_base64_data = re.sub(r'[^a-zA-Z0-9+/=]', '', base64_data.decode('utf-8'))
 
-    # Pad the base64 string to make its length a multiple of 4
+    # It looks like Serato pads with zeros instead of '=', something then drops
+    # these zeros and we get an invalid base64 strings. Here's a workaround
     padding_needed = 4 - len(clean_base64_data) % 4
     if padding_needed != 4:
-        clean_base64_data += "=" * padding_needed
+        clean_base64_data += "A" * padding_needed
 
     try:
         data = base64.b64decode(clean_base64_data)
@@ -207,16 +207,16 @@ def main(argc: int, argv: list[str]):
 
     serato_crate_paths = find_serato_crates(serato_folder_path)
 
-    processedSeratoFiles = {}
-    unsuccessfulConversions = []
+    processed_serato_files = {}
+    unsuccessful_conversions = []
 
     for path in serato_crate_paths:
-        playlistName = os.path.basename(path)[:-6]  # Remove '.crate' from the filename to get the playlist name
-        print("Converting: " + playlistName)
+        playlist_name = os.path.basename(path)[:-6]  # Remove '.crate' from the filename to get the playlist name
+        print("Converting: " + playlist_name)
 
-        # Initialize the playlist entry in processedSeratoFiles if not already present
-        if playlistName not in processedSeratoFiles:
-            processedSeratoFiles[playlistName] = []
+        # Initialize the playlist entry in processed_serato_files if not already present
+        if playlist_name not in processed_serato_files:
+            processed_serato_files[playlist_name] = []
 
         for track in extract_file_paths_from_crate(path):
             track = os.path.join(volume_with_tracks, track)
@@ -229,7 +229,7 @@ def main(argc: int, argv: list[str]):
                 elif track.lower().endswith('.m4a'):
                     audio_metadata, hot_cues = extract_m4a_metadata(track)
                 else:
-                    unsuccessfulConversions.append(track)
+                    unsuccessful_conversions.append(track)
                     continue
 
                 song_title = audio_metadata.get('TIT2', 'Unknown Title')
@@ -246,7 +246,7 @@ def main(argc: int, argv: list[str]):
                 else:
                     raise Exception("Invalid format type")
 
-                processedSeratoFiles[playlistName].append({
+                processed_serato_files[playlist_name].append({
                     'file_location': track,
                     'title': song_title,
                     'artist': song_artist,
@@ -256,15 +256,15 @@ def main(argc: int, argv: list[str]):
 
             except Exception as err:
                 print(f"An exception occurred: {err}")
-                unsuccessfulConversions.append(track)
+                unsuccessful_conversions.append(track)
 
-    generate_rekordbox_xml(processedSeratoFiles)
+    generate_rekordbox_xml(processed_serato_files)
     print("\nOutput successfully generated: Serato_Converted.xml\n")
 
     # Print the unsuccessful conversions
-    if unsuccessfulConversions:
+    if unsuccessful_conversions:
         print("The following files have not been converted (corrupt / unrecognised metadata, unsupported format, missing file etc): ")
-        for track in unsuccessfulConversions:
+        for track in unsuccessful_conversions:
             print(track)
 
 
