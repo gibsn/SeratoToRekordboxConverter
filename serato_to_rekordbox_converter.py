@@ -1,7 +1,6 @@
 # Serato to Rekordbox converter by BytePhoenix
 # TODO: fix failing TPE1 (artist) parsing
-# TODO: add names parsing
-# TODO: print number of track failed and successfully converted
+# TODO: print number of tracks failed and successfully converted
 # TODO: implement passing arguments from command line
 
 
@@ -39,16 +38,29 @@ def generate_rekordbox_xml(processed_data):
 
     track_id = 1
     for playlist_name, tracks in processed_data.items():
-        playlist_elem = SubElement(root_playlist, 'NODE', Name=playlist_name, Type="1", KeyType="0", Entries=str(len(tracks)))
+        playlist_elem = SubElement(
+            root_playlist, 'NODE', Name=playlist_name,
+            Type="1", KeyType="0", Entries=str(len(tracks)),
+        )
 
         for track in tracks:
             full_file_path = "file://localhost" + os.path.join(os.getcwd(), track['file_location'])
-            track_elem = SubElement(collection, 'TRACK', TrackID=str(track_id), Name=track['title'].strip(),
-                                    Artist=track['artist'].strip(), Kind="MP3 File", TotalTime=track['totalTime'], Location=full_file_path)
+
+            track_elem = SubElement(
+                collection, 'TRACK', TrackID=str(track_id),
+                Name=track['title'].strip(), Artist=track['artist'].strip(),
+                Kind="MP3 File", TotalTime=track['totalTime'], Location=full_file_path,
+            )
 
             for hot_cue in track.get('hot_cues', []):
-                SubElement(track_elem, 'POSITION_MARK', Name="", Type="0", Start=str(round(hot_cue['position_ms'] / 1000, 3)), Num=str(hot_cue['index']),
-                           Red=str(int(hot_cue['color'][1:3], 16)), Green=str(int(hot_cue['color'][3:5], 16)), Blue=str(int(hot_cue['color'][5:7], 16)))
+                SubElement(
+                    track_elem, 'POSITION_MARK', Name=hot_cue['name'], Type="0",
+                    Start=str(round(hot_cue['position_ms'] / 1000, 3)),
+                    Num=str(hot_cue['index']),
+                    Red=str(int(hot_cue['color'][1:3], 16)),
+                    Green=str(int(hot_cue['color'][3:5], 16)),
+                    Blue=str(int(hot_cue['color'][5:7], 16)),
+                )
 
             SubElement(playlist_elem, 'TRACK', Key=str(track_id))
             track_id += 1
@@ -181,10 +193,14 @@ def parse_serato_hot_cues(base64_data, track):
 
             hotcue_index = hot_cue_data[1]
             position_ms = struct.unpack('>I', hot_cue_data[2:6])[0]
+
             color_data = hot_cue_data[7:10]
             color_hex = "#{:02X}{:02X}{:02X}".format(color_data[0], color_data[1], color_data[2])
 
+            hotcue_name = hot_cue_data[12:-1].decode('utf8')
+
             hot_cues.append({
+                'name': hotcue_name,
                 'index': hotcue_index,
                 'position_ms': position_ms,
                 'color': color_hex,
@@ -211,7 +227,8 @@ def main(argc: int, argv: list[str]):
     unsuccessful_conversions = []
 
     for path in serato_crate_paths:
-        playlist_name = os.path.basename(path)[:-6]  # Remove '.crate' from the filename to get the playlist name
+        # Remove '.crate' from the filename to get the playlist name
+        playlist_name = os.path.basename(path)[:-6]
         print("Converting: " + playlist_name)
 
         # Initialize the playlist entry in processed_serato_files if not already present
