@@ -1,5 +1,4 @@
 # Serato to Rekordbox converter by BytePhoenix
-# TODO: fix failing TPE1 (artist) parsing
 # TODO: print number of tracks failed and successfully converted
 # TODO: implement passing arguments from command line
 
@@ -138,7 +137,7 @@ def extract_mp3_metadata(track):
             if hasattr(tag, 'text'):
                 audio_metadata[tag_name] = tag.text[0]
             else:
-                if tag_name in ("TIT2", "TPE1"):  # Ignore TALB warnings
+                if tag_name in ("TIT2", "TPE1") and tag != 'Unknown':  # Ignore TALB warnings
                     print(f"Warning: Tag {tag_name} not properly formatted in file {track}.")
                 audio_metadata[tag_name] = 'Unknown'
         except Exception as e:
