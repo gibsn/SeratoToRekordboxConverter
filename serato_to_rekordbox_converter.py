@@ -1,8 +1,9 @@
 # Serato to Rekordbox converter by BytePhoenix
 # TODO: print number of tracks failed and successfully converted
-# TODO: implement passing arguments from command line
+# TODO: copy hotcues to memorycues
 
 
+import argparse
 import base64
 import os
 import re
@@ -209,18 +210,27 @@ def parse_serato_hot_cues(base64_data, track):
 
     return hot_cues
 
+def get_cmd_args():
+    parser = argparse.ArgumentParser(
+        prog='serato_to_rekordbox_converter',
+        description='Converts your serato crates to rekorkdbox playlists, cues included',
+    )
+
+    parser.add_argument(
+        "--serato", default=DEFAULT_SERATO_FOLDER_PATH,
+        help="path to serato database",
+    )
+    parser.add_argument(
+        "--volume", default=DEFAULT_VOLUME_WITH_TRACKS,
+        help="root dir of the volume with tracks",
+    )
+
+    return parser.parse_args()
+
 def main(argc: int, argv: list[str]):
-    if argc != len(["serato_to_rekordbox_converter", "serato_folder_path", "volume_with_tracks"]):
-        print(
-            "Usage: serato_to_rekordbox_converter serato_folder_path volume_with_tracks",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    args = get_cmd_args()
 
-    serato_folder_path = argv[1]
-    volume_with_tracks = argv[2]
-
-    serato_crate_paths = find_serato_crates(serato_folder_path)
+    serato_crate_paths = find_serato_crates(args.serato)
 
     processed_serato_files = {}
     unsuccessful_conversions = []
@@ -235,7 +245,7 @@ def main(argc: int, argv: list[str]):
             processed_serato_files[playlist_name] = []
 
         for track in extract_file_paths_from_crate(path):
-            track = os.path.join(volume_with_tracks, track)
+            track = os.path.join(args.volume, track)
             audio_metadata = {}
             hot_cues = []
 
