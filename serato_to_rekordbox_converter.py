@@ -1,6 +1,5 @@
 # Serato to Rekordbox converter by BytePhoenix
 # TODO: print number of tracks failed and successfully converted
-# TODO: copy hotcues to memorycues
 
 
 import argparse
@@ -24,6 +23,7 @@ MEMORY_CUE_ID = -1
 DEFAULT_SERATO_FOLDER_PATH = "~/Music/_Serato_"
 DEFAULT_VOLUME_WITH_TRACKS = "/"
 DEFAULT_COPY_TO_MEMORY_CUES = True
+DEFAULT_OUTPUT_FILE_NAME = "Serato_Converted.xml"
 
 
 def prettify(elem):
@@ -33,10 +33,13 @@ def prettify(elem):
 
 def generate_rekordbox_xml(processed_data, copy_to_memory_cues):
     root = Element('DJ_PLAYLISTS', Version="1.0.0")
-    product = SubElement(root, 'PRODUCT', Name="rekordbox", Version="6.7.4", Company="AlphaTheta")
+    _ = SubElement(root, 'PRODUCT', Name="rekordbox", Version="6.7.4", Company="AlphaTheta")
     collection = SubElement(root, 'COLLECTION', Entries=str(len(processed_data)))
-    playlists_elem = SubElement(root, 'PLAYLISTS')
-    root_playlist = SubElement(playlists_elem, 'NODE', Type="0", Name="ROOT", Count=str(len(processed_data)))
+    playlists = SubElement(root, 'PLAYLISTS')
+    root_playlist = SubElement(
+        playlists, 'NODE', Type="0", Name="ROOT",
+        Count=str(len(processed_data)),
+    )
 
     track_id = 1
     for playlist_name, tracks in processed_data.items():
@@ -77,12 +80,12 @@ def generate_rekordbox_xml(processed_data, copy_to_memory_cues):
             SubElement(playlist_elem, 'TRACK', Key=str(track_id))
             track_id += 1
 
-    with open("Serato_Converted.xml", "w", encoding='utf-8') as f:
-        f.write(prettify(root))
+    with open(DEFAULT_OUTPUT_FILE_NAME, "w", encoding='utf-8') as xml_output:
+        xml_output.write(prettify(root))
 
 def find_serato_crates(serato_folder_path):
     crate_file_paths = []
-    for root, dirs, files in os.walk(serato_folder_path):
+    for root, _, files in os.walk(serato_folder_path):
         for file in files:
             if file.endswith('.crate'):
                 full_path = os.path.join(root, file)
@@ -90,11 +93,15 @@ def find_serato_crates(serato_folder_path):
     return crate_file_paths
 
 def has_equal_bytes_at(idx, bytes_array, subset):
-    return idx < len(bytes_array) - len(subset) and all(bytes_array[idx + i] == subset[i] for i in range(len(subset)))
+    if (idx < len(bytes_array) - len(subset) and
+       all(bytes_array[idx + i] == subset[i] for i in range(len(subset)))):
+        return True
+
+    return False
 
 def extract_file_paths_from_crate(crate_file_path, encoding='utf-16-be'):
-    with open(crate_file_path, 'rb') as f:
-        bytes_of_file = f.read()
+    with open(crate_file_path, 'rb') as crate:
+        bytes_of_file = crate.read()
 
     bytes_length = len(bytes_of_file)
     i = 0
@@ -126,19 +133,21 @@ def extract_m4a_metadata(track):
     }
 
     # Check for both '----:com.serato:markersv2' and '----:com.serato.dj:markersv2'
-    serato_markers_base64 = audio.get('----:com.serato:markersv2', [None])[0] or audio.get('----:com.serato.dj:markersv2', [None])[0]
+    serato_markers_base64 = audio.get('----:com.serato:markersv2', [None])[0]
+    if serato_markers_base64 is None:
+        serato_markers_base64 = audio.get('----:com.serato.dj:markersv2', [None])[0]
 
     if serato_markers_base64:
         hot_cues = parse_serato_hot_cues(serato_markers_base64, track)
         return audio_metadata, hot_cues
-    else:
-        return audio_metadata, []
+
+    return audio_metadata, []
 
 def extract_mp3_metadata(track):
     try:
         audio = ID3(track)
-    except Exception as e:
-        print(f"Warning: Unable to read ID3 tags from {track} due to {e}")
+    except Exception as err:
+        print(f"Warning: Unable to read ID3 tags from {track} due to {err}")
         return {}, []
 
     audio_metadata = {}
@@ -153,16 +162,19 @@ def extract_mp3_metadata(track):
                 if tag_name in ("TIT2", "TPE1") and tag != 'Unknown':  # Ignore TALB warnings
                     print(f"Warning: Tag {tag_name} not properly formatted in file {track}.")
                 audio_metadata[tag_name] = 'Unknown'
-        except Exception as e:
-            print(f"Warning: An issue occurred while reading {tag_name} from {track}: {e}")
+        except Exception as err:
+            print(f"Warning: An issue occurred while reading {tag_name} from {track}: {err}")
 
     for tag in audio.values():
         if tag.FrameID == 'GEOB':
             if tag.desc == 'Serato Markers2':
                 try:
                     hot_cues = parse_serato_hot_cues(tag.data, track)
-                except Exception as e:
-                    print(f"Warning: An issue occurred while reading Serato Markers2 from {track}: {e}")
+                except Exception as err:
+                    print(
+                        f"""Warning: An issue occurred while reading
+                        Serato Markers2 from {track}: {err}"""
+                    )
 
     return audio_metadata, hot_cues
 
@@ -178,8 +190,8 @@ def parse_serato_hot_cues(base64_data, track):
 
     try:
         data = base64.b64decode(clean_base64_data)
-    except Exception as e:
-        print(f"Error decoding base64 data: {e} {track}")
+    except Exception as err:
+        print(f"Error decoding base64 data: {err} {track}")
         return []
 
     index = 0
@@ -207,7 +219,7 @@ def parse_serato_hot_cues(base64_data, track):
             position_ms = struct.unpack('>I', hot_cue_data[2:6])[0]
 
             color_data = hot_cue_data[7:10]
-            color_hex = "#{:02X}{:02X}{:02X}".format(color_data[0], color_data[1], color_data[2])
+            color_hex = f"#{color_data[0]:02X}{color_data[1]:02X}{color_data[2]:02X}"
 
             hotcue_name = hot_cue_data[12:-1].decode('utf8')
 
@@ -305,7 +317,10 @@ def main(argc: int, argv: list[str]):
 
     # Print the unsuccessful conversions
     if unsuccessful_conversions:
-        print("The following files have not been converted (corrupt / unrecognised metadata, unsupported format, missing file etc): ")
+        print(
+            """The following files have not been converted (corrupt / unrecognised metadata,
+             unsupported format, missing file etc): """
+        )
         for track in unsuccessful_conversions:
             print(track)
 
