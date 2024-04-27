@@ -16,12 +16,14 @@ from mutagen.id3 import ID3
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
 
-START_MARKER = b'ptrk'
 PATH_LENGTH_OFFSET = 4
+START_MARKER = b'ptrk'
 START_MARKER_FULL_LENGTH = len(START_MARKER) + PATH_LENGTH_OFFSET
+MEMORY_CUE_ID = -1
 
 DEFAULT_SERATO_FOLDER_PATH = "~/Music/_Serato_"
 DEFAULT_VOLUME_WITH_TRACKS = "/"
+DEFAULT_COPY_TO_MEMORY_CUES = True
 
 
 def prettify(elem):
@@ -29,7 +31,7 @@ def prettify(elem):
     reparsed = minidom.parseString(rough_string)
     return reparsed.toprettyxml(indent="  ")
 
-def generate_rekordbox_xml(processed_data):
+def generate_rekordbox_xml(processed_data, copy_to_memory_cues):
     root = Element('DJ_PLAYLISTS', Version="1.0.0")
     product = SubElement(root, 'PRODUCT', Name="rekordbox", Version="6.7.4", Company="AlphaTheta")
     collection = SubElement(root, 'COLLECTION', Entries=str(len(processed_data)))
@@ -61,6 +63,16 @@ def generate_rekordbox_xml(processed_data):
                     Green=str(int(hot_cue['color'][3:5], 16)),
                     Blue=str(int(hot_cue['color'][5:7], 16)),
                 )
+
+                if copy_to_memory_cues:
+                    SubElement(
+                        track_elem, 'POSITION_MARK', Name=hot_cue['name'], Type="0",
+                        Start=str(round(hot_cue['position_ms'] / 1000, 3)),
+                        Num=str(MEMORY_CUE_ID),
+                        Red=str(int(hot_cue['color'][1:3], 16)),
+                        Green=str(int(hot_cue['color'][3:5], 16)),
+                        Blue=str(int(hot_cue['color'][5:7], 16)),
+                    )
 
             SubElement(playlist_elem, 'TRACK', Key=str(track_id))
             track_id += 1
@@ -224,6 +236,10 @@ def get_cmd_args():
         "--volume", default=DEFAULT_VOLUME_WITH_TRACKS,
         help="root dir of the volume with tracks",
     )
+    parser.add_argument(
+        "--memory", default=DEFAULT_COPY_TO_MEMORY_CUES,
+        help="copy hot cues to memory cues",
+    )
 
     return parser.parse_args()
 
@@ -284,7 +300,7 @@ def main(argc: int, argv: list[str]):
                 print(f"An exception occurred: {err}")
                 unsuccessful_conversions.append(track)
 
-    generate_rekordbox_xml(processed_serato_files)
+    generate_rekordbox_xml(processed_serato_files, args.memory)
     print("\nOutput successfully generated: Serato_Converted.xml\n")
 
     # Print the unsuccessful conversions
