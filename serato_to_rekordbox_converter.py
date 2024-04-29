@@ -90,6 +90,7 @@ def find_serato_crates(serato_folder_path):
             if file.endswith('.crate'):
                 full_path = os.path.join(root, file)
                 crate_file_paths.append(full_path)
+
     return crate_file_paths
 
 def has_equal_bytes_at(idx, bytes_array, subset):
@@ -265,7 +266,7 @@ def main(argc: int, argv: list[str]):
 
     for path in serato_crate_paths:
         # Remove '.crate' from the filename to get the playlist name
-        playlist_name = os.path.basename(path)[:-6]
+        playlist_name = os.path.basename(path)[:-6].replace("%%", "/")
         print("Converting: " + playlist_name)
 
         # Initialize the playlist entry in processed_serato_files if not already present
