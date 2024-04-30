@@ -19,11 +19,95 @@ PATH_LENGTH_OFFSET = 4
 START_MARKER = b'ptrk'
 START_MARKER_FULL_LENGTH = len(START_MARKER) + PATH_LENGTH_OFFSET
 MEMORY_CUE_ID = -1
+SERATO_DATABASE_FILE_NAME = "database V2"
 
 DEFAULT_SERATO_FOLDER_PATH = "~/Music/_Serato_"
 DEFAULT_VOLUME_WITH_TRACKS = "/"
 DEFAULT_COPY_TO_MEMORY_CUES = True
 DEFAULT_OUTPUT_FILE_NAME = "Serato_Converted.xml"
+
+
+class TrackKey:
+    NOTATION_CAMELOT     = 0
+    NOTATION_TRADITIONAL = 1
+
+    _traditional_to_camelot_map = {
+        "b":  "1B",              "abm": "1A",  "g#m": "1A",
+        "f#": "2B",  "gb": "2B", "ebm": "2A",  "d#m": "2A",
+        "db": "3B",  "c#": "3B", "bbm": "3A",  "a#m": "3A",
+        "ab": "4B",  "g#": "4B", "fm":  "4A",
+        "eb": "5B",  "d#": "5B", "cm":  "5A",
+        "bb": "6B",  "a#": "6B", "gm":  "6A",
+        "f":  "7B",              "dm":  "7A",
+        "c":  "8B",              "am":  "8A",
+        "g":  "9B",              "em":  "9A",
+        "d":  "10B",             "bm":  "10A",
+        "a":  "11B",             "f#m": "11A", "gbm": "11A",
+        "e":  "12B",             "dbm": "12A", "c#m": "12A",
+    }
+
+    _key: str  # as provided on initialisation, but cleaned
+    _notation_type: int
+
+    # constructor converts the given key to a standartised notation
+    def __init__(self, key: str):
+        key = key.lower()
+
+        if len(key) > 0 and key[0].isdigit():
+            self._notation_type = TrackKey.NOTATION_CAMELOT
+            self._key = key
+            return
+
+        self._notation_type = TrackKey.NOTATION_TRADITIONAL
+
+        if key.endswith("maj"):
+            key = key[:-3]
+        elif key.endswith("min"):
+            key = key[:-2]
+
+        self._key = key
+
+    @staticmethod
+    def _camelot_to_traditional(key: str) -> str:
+        # TODO
+        raise Exception("camelot to traditional convertion is not implemented")
+
+    @staticmethod
+    def _traditional_to_camelot(key: str) -> str:
+        if len(key) == 0:
+            return ""
+
+        return TrackKey._traditional_to_camelot_map[key]
+
+    def camelot(self) -> str:
+        if self._notation_type == TrackKey.NOTATION_CAMELOT:
+            return self._key.upper()
+
+        return self._traditional_to_camelot(self._key)
+
+class DatabaseEntry:
+    _fields: dict[str, bytes]
+
+    def __init__(self, fields: dict[str, bytes]):
+        self._fields = fields
+
+    def key(self) -> TrackKey:
+        return TrackKey(self._fields.get("tkey", b"").decode("utf-16-be"))
+
+    def location(self) -> str:
+        return self._fields["pfil"].decode("utf-16-be")
+
+class Database:
+    _tracks: dict[str, DatabaseEntry]
+
+    def __init__(self, tracks: list[DatabaseEntry]):
+        self._tracks = {}
+
+        for track in tracks:
+            self._tracks[track.location()] = track
+
+    def get_track(self, location: str) -> DatabaseEntry:
+        return self._tracks.get(location, None)
 
 
 def prettify(elem):
@@ -52,9 +136,9 @@ def generate_rekordbox_xml(processed_data, copy_to_memory_cues):
             full_file_path = "file://localhost" + os.path.join(os.getcwd(), track['file_location'])
 
             track_elem = SubElement(
-                collection, 'TRACK', TrackID=str(track_id),
-                Name=track['title'].strip(), Artist=track['artist'].strip(),
-                Kind="MP3 File", TotalTime=track['totalTime'], Location=full_file_path,
+                collection, 'TRACK', TrackID=str(track_id), Name=track['title'].strip(),
+                Artist=track['artist'].strip(), Kind="MP3 File", TotalTime=track['totalTime'],
+                Tonality=track["tonality"], Location=full_file_path,
             )
 
             for hot_cue in track.get('hot_cues', []):
@@ -235,6 +319,45 @@ def parse_serato_hot_cues(base64_data, track):
 
     return hot_cues
 
+def parse_serato_database(path: str) -> Database:
+    with open(path, 'rb') as database:
+        # skip header
+        database.seek(4, 1)
+
+        header_length_bytes = database.read(4)
+        header_length = struct.unpack(">I", header_length_bytes)[0]
+        database.seek(header_length, 1)
+
+        tracks = []
+
+        # read tracks
+        while True:
+            otrk = database.read(4).decode('utf8')
+            if otrk != "otrk":
+                # reached EOF
+                break
+
+            otrk_bytes = database.read(4)
+            otrk = struct.unpack(">I", otrk_bytes)[0]
+
+            read_bytes = 0
+            track_fields = {}
+
+            while read_bytes < otrk:
+                key = database.read(4).decode('utf8')
+
+                value_length_bytes = database.read(4)
+                value_length = struct.unpack(">I", value_length_bytes)[0]
+                value = database.read(value_length)
+
+                track_fields[key] = value
+                read_bytes += 4 + 4 + value_length
+
+            tracks.append(DatabaseEntry(track_fields))
+
+    return Database(tracks)
+
+
 def get_cmd_args():
     parser = argparse.ArgumentParser(
         prog='serato_to_rekordbox_converter',
@@ -264,6 +387,8 @@ def main(argc: int, argv: list[str]):
     processed_serato_files = {}
     unsuccessful_conversions = []
 
+    database = parse_serato_database(os.path.join(args.serato, SERATO_DATABASE_FILE_NAME))
+
     for path in serato_crate_paths:
         # Remove '.crate' from the filename to get the playlist name
         playlist_name = os.path.basename(path)[:-6].replace("%%", "/")
@@ -273,45 +398,47 @@ def main(argc: int, argv: list[str]):
         if playlist_name not in processed_serato_files:
             processed_serato_files[playlist_name] = []
 
-        for track in extract_file_paths_from_crate(path):
-            track = os.path.join(args.volume, track)
+        for path_to_track in extract_file_paths_from_crate(path):
+            real_path_to_track = os.path.join(args.volume, path_to_track)
             audio_metadata = {}
             hot_cues = []
 
             try:
-                if track.lower().endswith('.mp3'):
-                    audio_metadata, hot_cues = extract_mp3_metadata(track)
-                elif track.lower().endswith('.m4a'):
-                    audio_metadata, hot_cues = extract_m4a_metadata(track)
+                if path_to_track.lower().endswith('.mp3'):
+                    audio_metadata, hot_cues = extract_mp3_metadata(real_path_to_track)
+                elif path_to_track.lower().endswith('.m4a'):
+                    audio_metadata, hot_cues = extract_m4a_metadata(real_path_to_track)
                 else:
-                    unsuccessful_conversions.append(track)
+                    unsuccessful_conversions.append(path_to_track)
                     continue
 
                 song_title = audio_metadata.get('TIT2', 'Unknown Title')
                 song_artist = audio_metadata.get('TPE1', 'Unknown Artist')
+                key_in_camelot = database.get_track(path_to_track).key().camelot()
 
                 total_time = None
 
-                if track.lower().endswith('.mp3'):
-                    audio = MP3(track)
+                if path_to_track.lower().endswith('.mp3'):
+                    audio = MP3(real_path_to_track)
                     total_time = round(audio.info.length)
-                elif track.lower().endswith('.m4a'):
-                    audio = MP4(track)
+                elif path_to_track.lower().endswith('.m4a'):
+                    audio = MP4(real_path_to_track)
                     total_time = round(audio.info.length)
                 else:
                     raise Exception("Invalid format type")
 
                 processed_serato_files[playlist_name].append({
-                    'file_location': track,
+                    'file_location': real_path_to_track,
                     'title': song_title,
                     'artist': song_artist,
                     'hot_cues': hot_cues,
-                    'totalTime': str(total_time)
+                    'totalTime': str(total_time),
+                    'tonality': key_in_camelot
                 })
 
             except Exception as err:
-                print(f"An exception occurred: {err}")
-                unsuccessful_conversions.append(track)
+                print(f"An exception occurred for track {path_to_track}: {err}")
+                unsuccessful_conversions.append(path_to_track)
 
     generate_rekordbox_xml(processed_serato_files, args.memory)
     print("\nOutput successfully generated: Serato_Converted.xml\n")
